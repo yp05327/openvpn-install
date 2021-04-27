@@ -772,7 +772,7 @@ function installOpenVPN() {
 		echo "proto ${PROTOCOL}6" >>/etc/openvpn/server.conf
 	fi
 
-	echo "dev tun
+	echo "dev tap
 user nobody
 group $NOGROUP
 persist-key
@@ -1032,7 +1032,7 @@ WantedBy=multi-user.target" >/etc/systemd/system/iptables-openvpn.service
 		echo "proto tcp-client" >>/etc/openvpn/client-template.txt
 	fi
 	echo "remote $IP $PORT
-dev tun
+dev tap
 resolv-retry infinite
 nobind
 persist-key
