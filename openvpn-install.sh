@@ -1,7 +1,7 @@
 #!/bin/bash
 # shellcheck disable=SC1091,SC2164,SC2034,SC1072,SC1073,SC1009
 
-# Secure OpenVPN server installer for Debian, Ubuntu, CentOS, Amazon Linux 2, Fedora, Oracle Linux 8 and Arch Linux
+# Secure OpenVPN server installer for Debian, Ubuntu, CentOS, Amazon Linux 2, Fedora, Oracle Linux 8, Arch Linux, Rocky Linux and AlmaLinux.
 # https://github.com/angristan/openvpn-install
 
 function isRoot() {
@@ -55,7 +55,7 @@ function checkOS() {
 		if [[ $ID == "fedora" || $ID_LIKE == "fedora" ]]; then
 			OS="fedora"
 		fi
-		if [[ $ID == "centos" ]]; then
+		if [[ $ID == "centos" || $ID == "rocky" || $ID == "almalinux" ]]; then
 			OS="centos"
 			if [[ ! $VERSION_ID =~ (7|8) ]]; then
 				echo "⚠️ Your version of CentOS is not supported."
@@ -238,7 +238,7 @@ function installQuestions() {
 	if [[ $APPROVE_IP =~ n ]]; then
 		read -rp "IP address: " -e -i "$IP" IP
 	fi
-	# If $IP is a private IP address, the server must be behind NAT
+	# If $IP is a private IP address, the server must be behind NAT
 	if echo "$IP" | grep -qE '^(10\.|172\.1[6789]\.|172\.2[0-9]\.|172\.3[01]\.|192\.168)'; then
 		echo ""
 		echo "It seems this server is behind NAT. What is its public IPv4 address or hostname?"
@@ -609,7 +609,6 @@ function installQuestions() {
 		read -n1 -r -p "Press any key to continue..."
 	fi
 }
-
 function installOpenVPN() {
 	if [[ $AUTO_INSTALL == "y" ]]; then
 		# Set default choices so that no questions will be asked.
@@ -624,7 +623,6 @@ function installOpenVPN() {
 		CLIENT=${CLIENT:-client}
 		PASS=${PASS:-1}
 		CONTINUE=${CONTINUE:-y}
-
 		# Behind NAT, we'll default to the publicly reachable IPv4/IPv6.
 		if [[ $IPV6_SUPPORT == "y" ]]; then
 			PUBLIC_IP=$(curl https://ifconfig.co)
@@ -633,16 +631,13 @@ function installOpenVPN() {
 		fi
 		ENDPOINT=${ENDPOINT:-$PUBLIC_IP}
 	fi
-
 	# Run setup questions first, and set other variales if auto-install
 	installQuestions
-
 	# Get the "public" interface from the default route
 	NIC=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
 	if [[ -z $NIC ]] && [[ $IPV6_SUPPORT == 'y' ]]; then
 		NIC=$(ip -6 route show default | sed -ne 's/^default .* dev \([^ ]*\) .*$/\1/p')
 	fi
-
 	# $NIC can not be empty for script rm-openvpn-rules.sh
 	if [[ -z $NIC ]]; then
 		echo
@@ -655,7 +650,6 @@ function installOpenVPN() {
 			exit 1
 		fi
 	fi
-
 	# If OpenVPN isn't installed yet, install it. This script is more-or-less
 	# idempotent on multiple runs, but will only install OpenVPN from upstream
 	# the first time.
@@ -691,14 +685,12 @@ function installOpenVPN() {
 			rm -rf /etc/openvpn/easy-rsa/
 		fi
 	fi
-
 	# Find out if the machine uses nogroup or nobody for the permissionless group
 	if grep -qs "^nogroup:" /etc/group; then
 		NOGROUP=nogroup
 	else
 		NOGROUP=nobody
 	fi
-
 	# Install the latest version of easy-rsa from source, if not already installed.
 	if [[ ! -d /etc/openvpn/easy-rsa/ ]]; then
 		local version="3.0.7"
@@ -706,7 +698,6 @@ function installOpenVPN() {
 		mkdir -p /etc/openvpn/easy-rsa
 		tar xzf ~/easy-rsa.tgz --strip-components=1 --directory /etc/openvpn/easy-rsa
 		rm -f ~/easy-rsa.tgz
-
 		cd /etc/openvpn/easy-rsa/ || return
 		case $CERT_TYPE in
 		1)
@@ -717,27 +708,21 @@ function installOpenVPN() {
 			echo "set_var EASYRSA_KEY_SIZE $RSA_KEY_SIZE" >vars
 			;;
 		esac
-
 		# Generate a random, alphanumeric identifier of 16 characters for CN and one for server name
 		SERVER_CN="cn_$(head /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1)"
 		echo "$SERVER_CN" >SERVER_CN_GENERATED
 		SERVER_NAME="server_$(head /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1)"
 		echo "$SERVER_NAME" >SERVER_NAME_GENERATED
-
 		echo "set_var EASYRSA_REQ_CN $SERVER_CN" >>vars
-
 		# Create the PKI, set up the CA, the DH params and the server certificate
 		./easyrsa init-pki
 		./easyrsa --batch build-ca nopass
-
 		if [[ $DH_TYPE == "2" ]]; then
 			# ECDH keys are generated on-the-fly so we don't need to generate them beforehand
 			openssl dhparam -out dh.pem $DH_KEY_SIZE
 		fi
-
 		./easyrsa build-server-full "$SERVER_NAME" nopass
 		EASYRSA_CRL_DAYS=3650 ./easyrsa gen-crl
-
 		case $TLS_SIG in
 		1)
 			# Generate tls-crypt key
@@ -754,16 +739,13 @@ function installOpenVPN() {
 		cd /etc/openvpn/easy-rsa/ || return
 		SERVER_NAME=$(cat SERVER_NAME_GENERATED)
 	fi
-
 	# Move all the generated files
 	cp pki/ca.crt pki/private/ca.key "pki/issued/$SERVER_NAME.crt" "pki/private/$SERVER_NAME.key" /etc/openvpn/easy-rsa/pki/crl.pem /etc/openvpn
 	if [[ $DH_TYPE == "2" ]]; then
 		cp dh.pem /etc/openvpn
 	fi
-
 	# Make cert revocation list readable for non-root
 	chmod 644 /etc/openvpn/crl.pem
-
 	# Generate server.conf
 	echo "port $PORT" >/etc/openvpn/server.conf
 	if [[ $IPV6_SUPPORT == 'n' ]]; then
@@ -771,7 +753,6 @@ function installOpenVPN() {
 	elif [[ $IPV6_SUPPORT == 'y' ]]; then
 		echo "proto ${PROTOCOL}6" >>/etc/openvpn/server.conf
 	fi
-
 	echo "dev tap
 user nobody
 group $NOGROUP
@@ -782,7 +763,6 @@ topology subnet
 server 10.8.0.0 255.255.255.0
 client-to-client
 ifconfig-pool-persist ipp.txt" >>/etc/openvpn/server.conf
-
 	# DNS resolvers
 	case $DNS in
 	1) # Current system resolvers
@@ -855,7 +835,6 @@ ifconfig-pool-persist ipp.txt" >>/etc/openvpn/server.conf
 		;;
 	esac
 	echo 'push "redirect-gateway def1 bypass-dhcp"' >>/etc/openvpn/server.conf
-
 	# IPv6 network settings if needed
 	if [[ $IPV6_SUPPORT == 'y' ]]; then
 		echo 'server-ipv6 fd42:42:42:42::/112
@@ -864,18 +843,15 @@ push tun-ipv6
 push "route-ipv6 2000::/3"
 push "redirect-gateway ipv6"' >>/etc/openvpn/server.conf
 	fi
-
 	if [[ $COMPRESSION_ENABLED == "y" ]]; then
 		echo "compress $COMPRESSION_ALG" >>/etc/openvpn/server.conf
 	fi
-
 	if [[ $DH_TYPE == "1" ]]; then
 		echo "dh none" >>/etc/openvpn/server.conf
 		echo "ecdh-curve $DH_CURVE" >>/etc/openvpn/server.conf
 	elif [[ $DH_TYPE == "2" ]]; then
 		echo "dh dh.pem" >>/etc/openvpn/server.conf
 	fi
-
 	case $TLS_SIG in
 	1)
 		echo "tls-crypt tls-crypt.key" >>/etc/openvpn/server.conf
@@ -884,7 +860,6 @@ push "redirect-gateway ipv6"' >>/etc/openvpn/server.conf
 		echo "tls-auth tls-auth.key 0" >>/etc/openvpn/server.conf
 		;;
 	esac
-
 	echo "crl-verify crl.pem
 ca ca.crt
 cert $SERVER_NAME.crt
@@ -898,12 +873,10 @@ tls-cipher $CC_CIPHER
 client-config-dir /etc/openvpn/ccd
 status /var/log/openvpn/status.log
 verb 3" >>/etc/openvpn/server.conf
-
 	# Create client-config-dir dir
 	mkdir -p /etc/openvpn/ccd
 	# Create log dir
 	mkdir -p /var/log/openvpn
-
 	# Enable routing
 	echo 'net.ipv4.ip_forward=1' >/etc/sysctl.d/99-openvpn.conf
 	if [[ $IPV6_SUPPORT == 'y' ]]; then
@@ -911,7 +884,6 @@ verb 3" >>/etc/openvpn/server.conf
 	fi
 	# Apply sysctl rules
 	sysctl --system
-
 	# If SELinux is enabled and a custom port was selected, we need this
 	if hash sestatus 2>/dev/null; then
 		if sestatus | grep "Current mode" | grep -qs "enforcing"; then
@@ -920,12 +892,10 @@ verb 3" >>/etc/openvpn/server.conf
 			fi
 		fi
 	fi
-
 	# Finally, restart and enable OpenVPN
 	if [[ $OS == 'arch' || $OS == 'fedora' || $OS == 'centos' || $OS == 'oracle' ]]; then
 		# Don't modify package-provided service
 		cp /usr/lib/systemd/system/openvpn-server@.service /etc/systemd/system/openvpn-server@.service
-
 		# Workaround to fix OpenVPN service on OpenVZ
 		sed -i 's|LimitNPROC|#LimitNPROC|' /etc/systemd/system/openvpn-server@.service
 		# Another workaround to keep using /etc/openvpn/
@@ -934,7 +904,6 @@ verb 3" >>/etc/openvpn/server.conf
 		if [[ $OS == "fedora" ]]; then
 			sed -i 's|--cipher AES-256-GCM --ncp-ciphers AES-256-GCM:AES-128-GCM:AES-256-CBC:AES-128-CBC:BF-CBC||' /etc/systemd/system/openvpn-server@.service
 		fi
-
 		systemctl daemon-reload
 		systemctl enable openvpn-server@server
 		systemctl restart openvpn-server@server
@@ -946,24 +915,19 @@ verb 3" >>/etc/openvpn/server.conf
 	else
 		# Don't modify package-provided service
 		cp /lib/systemd/system/openvpn\@.service /etc/systemd/system/openvpn\@.service
-
 		# Workaround to fix OpenVPN service on OpenVZ
 		sed -i 's|LimitNPROC|#LimitNPROC|' /etc/systemd/system/openvpn\@.service
 		# Another workaround to keep using /etc/openvpn/
 		sed -i 's|/etc/openvpn/server|/etc/openvpn|' /etc/systemd/system/openvpn\@.service
-
 		systemctl daemon-reload
 		systemctl enable openvpn@server
 		systemctl restart openvpn@server
 	fi
-
 	if [[ $DNS == 2 ]]; then
 		installUnbound
 	fi
-
 	# Add iptables rules in two scripts
 	mkdir -p /etc/iptables
-
 	# Script to add rules
 	echo "#!/bin/sh
 iptables -t nat -I POSTROUTING 1 -s 10.8.0.0/24 -o $NIC -j MASQUERADE
@@ -971,7 +935,6 @@ iptables -I INPUT 1 -i tun0 -j ACCEPT
 iptables -I FORWARD 1 -i $NIC -o tun0 -j ACCEPT
 iptables -I FORWARD 1 -i tun0 -o $NIC -j ACCEPT
 iptables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >/etc/iptables/add-openvpn-rules.sh
-
 	if [[ $IPV6_SUPPORT == 'y' ]]; then
 		echo "ip6tables -t nat -I POSTROUTING 1 -s fd42:42:42:42::/112 -o $NIC -j MASQUERADE
 ip6tables -I INPUT 1 -i tun0 -j ACCEPT
@@ -979,7 +942,6 @@ ip6tables -I FORWARD 1 -i $NIC -o tun0 -j ACCEPT
 ip6tables -I FORWARD 1 -i tun0 -o $NIC -j ACCEPT
 ip6tables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >>/etc/iptables/add-openvpn-rules.sh
 	fi
-
 	# Script to remove rules
 	echo "#!/bin/sh
 iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o $NIC -j MASQUERADE
@@ -987,7 +949,6 @@ iptables -D INPUT -i tun0 -j ACCEPT
 iptables -D FORWARD -i $NIC -o tun0 -j ACCEPT
 iptables -D FORWARD -i tun0 -o $NIC -j ACCEPT
 iptables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >/etc/iptables/rm-openvpn-rules.sh
-
 	if [[ $IPV6_SUPPORT == 'y' ]]; then
 		echo "ip6tables -t nat -D POSTROUTING -s fd42:42:42:42::/112 -o $NIC -j MASQUERADE
 ip6tables -D INPUT -i tun0 -j ACCEPT
@@ -995,35 +956,28 @@ ip6tables -D FORWARD -i $NIC -o tun0 -j ACCEPT
 ip6tables -D FORWARD -i tun0 -o $NIC -j ACCEPT
 ip6tables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >>/etc/iptables/rm-openvpn-rules.sh
 	fi
-
 	chmod +x /etc/iptables/add-openvpn-rules.sh
 	chmod +x /etc/iptables/rm-openvpn-rules.sh
-
 	# Handle the rules via a systemd script
 	echo "[Unit]
 Description=iptables rules for OpenVPN
 Before=network-online.target
 Wants=network-online.target
-
 [Service]
 Type=oneshot
 ExecStart=/etc/iptables/add-openvpn-rules.sh
 ExecStop=/etc/iptables/rm-openvpn-rules.sh
 RemainAfterExit=yes
-
 [Install]
 WantedBy=multi-user.target" >/etc/systemd/system/iptables-openvpn.service
-
 	# Enable service and apply rules
 	systemctl daemon-reload
 	systemctl enable iptables-openvpn
 	systemctl start iptables-openvpn
-
 	# If the server is behind a NAT, use the correct IP address for the clients to connect to
 	if [[ $ENDPOINT != "" ]]; then
 		IP=$ENDPOINT
 	fi
-
 	# client-template.txt is created so we have a template to add further users later
 	echo "client" >/etc/openvpn/client-template.txt
 	if [[ $PROTOCOL == 'udp' ]]; then
@@ -1049,35 +1003,28 @@ tls-cipher $CC_CIPHER
 ignore-unknown-option block-outside-dns
 setenv opt block-outside-dns # Prevent Windows 10 DNS leak
 verb 3" >>/etc/openvpn/client-template.txt
-
 	if [[ $COMPRESSION_ENABLED == "y" ]]; then
 		echo "compress $COMPRESSION_ALG" >>/etc/openvpn/client-template.txt
 	fi
-
 	# Generate the custom client.ovpn
 	newClient
 	echo "If you want to add more clients, you simply need to run this script another time!"
 }
-
 function newClient() {
 	echo ""
 	echo "Tell me a name for the client."
 	echo "The name must consist of alphanumeric character. It may also include an underscore or a dash."
-
 	until [[ $CLIENT =~ ^[a-zA-Z0-9_-]+$ ]]; do
 		read -rp "Client name: " -e CLIENT
 	done
-
 	echo ""
 	echo "Do you want to protect the configuration file with a password?"
 	echo "(e.g. encrypt the private key with a password)"
 	echo "   1) Add a passwordless client"
 	echo "   2) Use a password for the client"
-
 	until [[ $PASS =~ ^[1-2]$ ]]; do
 		read -rp "Select an option [1-2]: " -e -i 1 PASS
 	done
-
 	CLIENTEXISTS=$(tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep -c -E "/CN=$CLIENT\$")
 	if [[ $CLIENTEXISTS == '1' ]]; then
 		echo ""
@@ -1096,7 +1043,6 @@ function newClient() {
 		esac
 		echo "Client $CLIENT added."
 	fi
-
 	# Home directory of the user, where the client configuration will be written
 	if [ -e "/home/${CLIENT}" ]; then
 		# if $1 is a user name
@@ -1113,29 +1059,24 @@ function newClient() {
 		# if not SUDO_USER, use /root
 		homeDir="/root"
 	fi
-
 	# Determine if we use tls-auth or tls-crypt
 	if grep -qs "^tls-crypt" /etc/openvpn/server.conf; then
 		TLS_SIG="1"
 	elif grep -qs "^tls-auth" /etc/openvpn/server.conf; then
 		TLS_SIG="2"
 	fi
-
 	# Generates the custom client.ovpn
 	cp /etc/openvpn/client-template.txt "$homeDir/$CLIENT.ovpn"
 	{
 		echo "<ca>"
 		cat "/etc/openvpn/easy-rsa/pki/ca.crt"
 		echo "</ca>"
-
 		echo "<cert>"
 		awk '/BEGIN/,/END/' "/etc/openvpn/easy-rsa/pki/issued/$CLIENT.crt"
 		echo "</cert>"
-
 		echo "<key>"
 		cat "/etc/openvpn/easy-rsa/pki/private/$CLIENT.key"
 		echo "</key>"
-
 		case $TLS_SIG in
 		1)
 			echo "<tls-crypt>"
@@ -1150,14 +1091,11 @@ function newClient() {
 			;;
 		esac
 	} >>"$homeDir/$CLIENT.ovpn"
-
 	echo ""
 	echo "The configuration file has been written to $homeDir/$CLIENT.ovpn."
 	echo "Download the .ovpn file and import it in your OpenVPN client."
-
 	exit 0
 }
-
 function revokeClient() {
 	NUMBEROFCLIENTS=$(tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep -c "^V")
 	if [[ $NUMBEROFCLIENTS == '0' ]]; then
@@ -1165,7 +1103,6 @@ function revokeClient() {
 		echo "You have no existing clients!"
 		exit 1
 	fi
-
 	echo ""
 	echo "Select the existing client certificate you want to revoke"
 	tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep "^V" | cut -d '=' -f 2 | nl -s ') '
@@ -1186,26 +1123,21 @@ function revokeClient() {
 	find /home/ -maxdepth 2 -name "$CLIENT.ovpn" -delete
 	rm -f "/root/$CLIENT.ovpn"
 	sed -i "/^$CLIENT,.*/d" /etc/openvpn/ipp.txt
-
 	echo ""
 	echo "Certificate for client $CLIENT revoked."
 }
-
 function removeUnbound() {
 	# Remove OpenVPN-related config
 	sed -i '/include: \/etc\/unbound\/openvpn.conf/d' /etc/unbound/unbound.conf
 	rm /etc/unbound/openvpn.conf
-
 	until [[ $REMOVE_UNBOUND =~ (y|n) ]]; do
 		echo ""
 		echo "If you were already using Unbound before installing OpenVPN, I removed the configuration related to OpenVPN."
 		read -rp "Do you want to completely remove Unbound? [y/n]: " -e REMOVE_UNBOUND
 	done
-
 	if [[ $REMOVE_UNBOUND == 'y' ]]; then
 		# Stop Unbound
 		systemctl stop unbound
-
 		if [[ $OS =~ (debian|ubuntu) ]]; then
 			apt-get remove --purge -y unbound
 		elif [[ $OS == 'arch' ]]; then
@@ -1215,9 +1147,7 @@ function removeUnbound() {
 		elif [[ $OS == 'fedora' ]]; then
 			dnf remove -y unbound
 		fi
-
 		rm -rf /etc/unbound/
-
 		echo ""
 		echo "Unbound removed!"
 	else
@@ -1226,7 +1156,6 @@ function removeUnbound() {
 		echo "Unbound wasn't removed."
 	fi
 }
-
 function removeOpenVPN() {
 	echo ""
 	read -rp "Do you really want to remove OpenVPN? [y/n]: " -e -i n REMOVE
@@ -1234,7 +1163,6 @@ function removeOpenVPN() {
 		# Get OpenVPN port from the configuration
 		PORT=$(grep '^port ' /etc/openvpn/server.conf | cut -d " " -f 2)
 		PROTOCOL=$(grep '^proto ' /etc/openvpn/server.conf | cut -d " " -f 2)
-
 		# Stop OpenVPN
 		if [[ $OS =~ (fedora|arch|centos|oracle) ]]; then
 			systemctl disable openvpn-server@server
@@ -1250,7 +1178,6 @@ function removeOpenVPN() {
 			# Remove customised service
 			rm /etc/systemd/system/openvpn\@.service
 		fi
-
 		# Remove the iptables rules related to the script
 		systemctl stop iptables-openvpn
 		# Cleanup
@@ -1259,7 +1186,6 @@ function removeOpenVPN() {
 		systemctl daemon-reload
 		rm /etc/iptables/add-openvpn-rules.sh
 		rm /etc/iptables/rm-openvpn-rules.sh
-
 		# SELinux
 		if hash sestatus 2>/dev/null; then
 			if sestatus | grep "Current mode" | grep -qs "enforcing"; then
@@ -1268,7 +1194,6 @@ function removeOpenVPN() {
 				fi
 			fi
 		fi
-
 		if [[ $OS =~ (debian|ubuntu) ]]; then
 			apt-get remove --purge -y openvpn
 			if [[ -e /etc/apt/sources.list.d/openvpn.list ]]; then
@@ -1282,7 +1207,6 @@ function removeOpenVPN() {
 		elif [[ $OS == 'fedora' ]]; then
 			dnf remove -y openvpn
 		fi
-
 		# Cleanup
 		find /home/ -maxdepth 2 -name "*.ovpn" -delete
 		find /root/ -maxdepth 1 -name "*.ovpn" -delete
@@ -1290,7 +1214,6 @@ function removeOpenVPN() {
 		rm -rf /usr/share/doc/openvpn*
 		rm -f /etc/sysctl.d/99-openvpn.conf
 		rm -rf /var/log/openvpn
-
 		# Unbound
 		if [[ -e /etc/unbound/openvpn.conf ]]; then
 			removeUnbound
@@ -1302,7 +1225,6 @@ function removeOpenVPN() {
 		echo "Removal aborted!"
 	fi
 }
-
 function manageMenu() {
 	echo "Welcome to OpenVPN-install!"
 	echo "The git repository is available at: https://github.com/angristan/openvpn-install"
@@ -1317,7 +1239,6 @@ function manageMenu() {
 	until [[ $MENU_OPTION =~ ^[1-4]$ ]]; do
 		read -rp "Select an option [1-4]: " MENU_OPTION
 	done
-
 	case $MENU_OPTION in
 	1)
 		newClient
@@ -1333,10 +1254,8 @@ function manageMenu() {
 		;;
 	esac
 }
-
 # Check for root, TUN, OS...
 initialCheck
-
 # Check if OpenVPN is already installed
 if [[ -e /etc/openvpn/server.conf && $AUTO_INSTALL != "y" ]]; then
 	manageMenu
